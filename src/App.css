@@ -1,0 +1,91 @@
+#root {
+  min-height: 100vh;
+}
+
+.cv-page {
+  font-family: Arial, Helvetica, sans-serif;
+  font-kerning: none;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  text-rendering: geometricPrecision;
+}
+
+.cv-skill-list {
+  margin-top: 22px;
+  font-size: 11px;
+  line-height: 13px;
+}
+
+.cv-skill-item {
+  margin: 0 0 20px;
+  break-inside: avoid;
+}
+
+.cv-skill-item:last-child {
+  margin-bottom: 0;
+}
+
+.cv-skill-label {
+  display: block;
+  max-width: 150px;
+  margin: 0;
+  line-height: 14px;
+  overflow-wrap: break-word;
+}
+
+.cv-skill-dots {
+  display: block;
+  height: 16px;
+  padding-top: 8px;
+  line-height: 0;
+  white-space: nowrap;
+}
+
+.cv-skill-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 4px;
+  border: 1px solid #262626;
+  border-radius: 999px;
+  background: #ffffff;
+  vertical-align: top;
+}
+
+.cv-skill-dot.is-filled {
+  background: #262626;
+}
+
+.cv-bullet-list {
+  margin-top: 12px;
+  padding-left: 8px;
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.cv-bullet-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  margin-bottom: 7px;
+  break-inside: avoid;
+}
+
+.cv-bullet-row:last-child {
+  margin-bottom: 0;
+}
+
+.cv-bullet-marker {
+  flex: 0 0 auto;
+  width: 3px;
+  height: 3px;
+  margin-top: 7px;
+  border-radius: 999px;
+  background: #171717;
+}
+
+.cv-bullet-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 17px;
+}
