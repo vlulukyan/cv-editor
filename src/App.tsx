@@ -30,8 +30,8 @@ type PersonalInfo = {
 }
 
 type Skill = {
-  name: string
-  level: number
+  title: string
+  bullets: string[]
 }
 
 type Job = {
@@ -52,6 +52,13 @@ type Course = {
   period: string
 }
 
+type BulletedSectionItem = {
+  title: string
+  subtitle: string
+  period: string
+  bullets: string[]
+}
+
 type LinkItem = {
   title: string
   url: string
@@ -67,7 +74,11 @@ type CVData = {
   experience: Job[]
   education: Education[]
   courses: Course[]
+  certifications: BulletedSectionItem[]
+  projects: BulletedSectionItem[]
 }
+
+type BulletedSectionName = 'certifications' | 'projects'
 
 const initialData: CVData = {
   personal: {
@@ -83,17 +94,34 @@ const initialData: CVData = {
   profile:
     'Experienced Web Developer with expertise in all phases of advanced web development. Strong understanding of user interface design, testing, and debugging. Proven ability to design, install, test, and maintain robust web systems. Possessing a diverse skillset including JavaScript, TypeScript, Node.js, NestJS, Angular, and proficiency in MongoDB, MySQL, and PostgreSQL databases. Effective self-manager with excellent teamwork and collaboration skills.',
   skills: [
-    { name: 'Visual Design Skills', level: 5 },
-    { name: 'Knowledgeable in User Interface / User Experience', level: 5 },
-    { name: 'Adaptability', level: 5 },
-    { name: 'Database Management', level: 5 },
-    { name: 'PHP / Python', level: 4 },
-    { name: 'JavaScript / TypeScript', level: 5 },
-    { name: 'Node JS / Nest JS', level: 5 },
-    { name: 'PostgreSQL / Mongo DB', level: 4 },
-    { name: 'Redis', level: 3 },
-    { name: 'ElasticSearch', level: 4 },
-    { name: 'Angular / Next JS', level: 5 },
+    {
+      title: 'Backend',
+      bullets: ['Node.js, NestJS, Express'],
+    },
+    {
+      title: 'Frontend',
+      bullets: ['Angular, Next.js'],
+    },
+    {
+      title: 'Databases',
+      bullets: ['PostgreSQL, MongoDB, Redis'],
+    },
+    {
+      title: 'DevOps & Infrastructure',
+      bullets: ['Docker, Linux (CentOS, Ubuntu), Nginx', 'Server management, networking'],
+    },
+    {
+      title: 'Search & Caching',
+      bullets: ['Elasticsearch, Redis'],
+    },
+    {
+      title: 'Security',
+      bullets: ['Firewall configuration, Wazuh, SIEM basics', 'Cybersecurity practices, incident response'],
+    },
+    {
+      title: 'Other',
+      bullets: ['REST APIs, Microservices architecture'],
+    },
   ],
   hobbies: 'Hiking, Watching football',
   languages: ['English', 'Russian', 'Armenian'],
@@ -179,6 +207,8 @@ const initialData: CVData = {
       period: 'Jun 2017 - Sep 2017',
     },
   ],
+  certifications: [],
+  projects: [],
 }
 
 const storageKey = 'cv-editor-data'
@@ -198,23 +228,6 @@ const pdfColorStyleOverrides = {
   '--color-neutral-800': '#262626',
   '--color-neutral-900': '#171717',
   '--color-neutral-950': '#0a0a0a',
-}
-
-type DotsProps = {
-  level?: number
-}
-
-function Dots({ level = 4 }: DotsProps) {
-  return (
-    <div className="cv-skill-dots">
-      {Array.from({ length: 5 }).map((_, index) => (
-        <span
-          className={`cv-skill-dot ${index < level ? 'is-filled' : ''}`}
-          key={index}
-        />
-      ))}
-    </div>
-  )
 }
 
 type SidebarFieldProps = {
@@ -268,6 +281,64 @@ function BulletList({ bullets }: BulletListProps) {
   )
 }
 
+type BulletedSectionProps = {
+  items: BulletedSectionItem[]
+}
+
+type CertificationSectionProps = {
+  items: BulletedSectionItem[]
+}
+
+function CertificationSectionItems({ items }: CertificationSectionProps) {
+  return (
+    <div className="mt-5 space-y-3">
+      {items.map((item, index) => {
+        const parts = [item.title, item.subtitle, item.period].filter(Boolean)
+
+        return (
+          <div
+            className="text-[11px] leading-[16px]"
+            key={`${item.title}-${index}`}
+          >
+            {parts.join(' | ')}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function BulletedSectionItems({ items }: BulletedSectionProps) {
+  return (
+    <div className="mt-5 space-y-[28px]">
+      {items.map((item, index) => {
+        const bullets = item.bullets.filter(Boolean)
+
+        return (
+          <div key={`${item.title}-${index}`}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="max-w-[320px] text-[13px] font-semibold leading-[16px]">
+                  {item.title}
+                </div>
+                {item.subtitle ? (
+                  <div className="text-[11px] leading-[15px]">
+                    {item.subtitle}
+                  </div>
+                ) : null}
+                {item.period ? (
+                  <div className="text-[11px] leading-[15px]">{item.period}</div>
+                ) : null}
+              </div>
+            </div>
+            {bullets.length ? <BulletList bullets={bullets} /> : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function normalizeUrl(url: string) {
   const trimmedUrl = url.trim()
 
@@ -293,10 +364,38 @@ function moveItem<T>(items: T[], fromIndex: number, toIndex: number) {
 }
 
 function normalizeSavedData(data: CVData) {
+  const normalizedSkills = Array.isArray(data.skills)
+    ? data.skills.map((skill) => {
+        const item = skill as Record<string, unknown>
+
+        if (typeof item.title === 'string' && Array.isArray(item.bullets)) {
+          return {
+            title: item.title,
+            bullets: item.bullets.filter(
+              (bullet): bullet is string => typeof bullet === 'string' && Boolean(bullet),
+            ),
+          }
+        }
+
+        if (typeof item.name === 'string') {
+          return {
+            title: item.name,
+            bullets: [],
+          }
+        }
+
+        return {
+          title: '',
+          bullets: [],
+        }
+      })
+    : initialData.skills
+
   return {
     ...initialData,
     ...data,
     personal: { ...initialData.personal, ...data.personal },
+    skills: normalizedSkills,
     links: Array.isArray(data.links)
       ? data.links.map((link) =>
           typeof link === 'string' ? { title: link, url: '' } : link,
@@ -376,9 +475,9 @@ function CVPage({ data, secondPage = false }: CVPageProps) {
                 <div className="mt-3 h-px bg-neutral-500" />
                 <div className="cv-skill-list">
                   {data.skills.map((skill, index) => (
-                    <div className="cv-skill-item" key={`${skill.name}-${index}`}>
-                      <div className="cv-skill-label">{skill.name}</div>
-                      <Dots level={skill.level} />
+                    <div className="cv-skill-item" key={`${skill.title}-${index}`}>
+                      <div className="cv-skill-title">{skill.title}:</div>
+                      <BulletList bullets={skill.bullets} />
                     </div>
                   ))}
                 </div>
@@ -405,7 +504,9 @@ function CVPage({ data, secondPage = false }: CVPageProps) {
             <section>
               <h3 className={sectionTitle}>Profile</h3>
               <div className="mt-3 h-px bg-neutral-500" />
-              <p className="mt-4 text-[11px] leading-[17px]">{data.profile}</p>
+              <p className="mt-4 whitespace-pre-line text-[11px] leading-[17px]">
+                {data.profile}
+              </p>
             </section>
 
             <section className="mt-8">
@@ -531,6 +632,22 @@ function CVPage({ data, secondPage = false }: CVPageProps) {
                 ))}
               </div>
             </section>
+
+            {data.certifications.length ? (
+              <section className="mt-10">
+                <h3 className={sectionTitle}>Certifications</h3>
+                <div className="mt-3 h-px bg-neutral-500" />
+                <CertificationSectionItems items={data.certifications} />
+              </section>
+            ) : null}
+
+            {data.projects.length ? (
+              <section className="mt-10">
+                <h3 className={sectionTitle}>Projects</h3>
+                <div className="mt-3 h-px bg-neutral-500" />
+                <BulletedSectionItems items={data.projects} />
+              </section>
+            ) : null}
           </main>
         </div>
       )}
@@ -559,18 +676,24 @@ function App() {
     }))
   }
 
-  const updateSkillName = (index: number, value: string) => {
+  const updateSkillTitle = (index: number, value: string) => {
     setData((previous) => {
       const skills = [...previous.skills]
-      skills[index] = { ...skills[index], name: value }
+      skills[index] = { ...skills[index], title: value }
       return { ...previous, skills }
     })
   }
 
-  const updateSkillLevel = (index: number, value: string) => {
+  const updateSkillBullets = (index: number, value: string) => {
     setData((previous) => {
       const skills = [...previous.skills]
-      skills[index] = { ...skills[index], level: Number(value) }
+      skills[index] = {
+        ...skills[index],
+        bullets: value
+          .split('\n')
+          .map((item) => item.trim())
+          .filter(Boolean),
+      }
       return { ...previous, skills }
     })
   }
@@ -578,7 +701,7 @@ function App() {
   const addSkill = () => {
     setData((previous) => ({
       ...previous,
-      skills: [...previous.skills, { name: 'New Skill', level: 3 }],
+      skills: [...previous.skills, { title: 'New Section', bullets: ['New skill'] }],
     }))
   }
 
@@ -640,6 +763,33 @@ function App() {
     })
   }
 
+  const addJobBullet = (jobIndex: number) => {
+    setData((previous) => {
+      const experience = [...previous.experience]
+      experience[jobIndex] = {
+        ...experience[jobIndex],
+        bullets: [...experience[jobIndex].bullets, 'Describe your responsibility'],
+      }
+      return { ...previous, experience }
+    })
+  }
+
+  const removeJobBullet = (jobIndex: number, bulletIndex: number) => {
+    setData((previous) => {
+      const experience = [...previous.experience]
+      const bullets = experience[jobIndex].bullets.filter(
+        (_, index) => index !== bulletIndex,
+      )
+
+      experience[jobIndex] = {
+        ...experience[jobIndex],
+        bullets: bullets.length ? bullets : ['Describe your responsibility'],
+      }
+
+      return { ...previous, experience }
+    })
+  }
+
   const addJob = () => {
     setData((previous) => ({
       ...previous,
@@ -667,6 +817,99 @@ function App() {
       ...previous,
       experience: moveItem(previous.experience, index, index + direction),
     }))
+  }
+
+  const updateBulletedSectionItem = (
+    section: BulletedSectionName,
+    itemIndex: number,
+    key: keyof BulletedSectionItem,
+    value: string,
+  ) => {
+    setData((previous) => {
+      const items = [...previous[section]]
+      items[itemIndex] = { ...items[itemIndex], [key]: value }
+      return { ...previous, [section]: items }
+    })
+  }
+
+  const updateBulletedSectionBullet = (
+    section: BulletedSectionName,
+    itemIndex: number,
+    bulletIndex: number,
+    value: string,
+  ) => {
+    setData((previous) => {
+      const items = [...previous[section]]
+      const bullets = [...items[itemIndex].bullets]
+      bullets[bulletIndex] = value
+      items[itemIndex] = { ...items[itemIndex], bullets }
+      return { ...previous, [section]: items }
+    })
+  }
+
+  const addBulletedSectionItem = (
+    section: BulletedSectionName,
+    item: BulletedSectionItem,
+  ) => {
+    setData((previous) => ({
+      ...previous,
+      [section]: [...previous[section], item],
+    }))
+  }
+
+  const removeBulletedSectionItem = (
+    section: BulletedSectionName,
+    itemIndex: number,
+  ) => {
+    setData((previous) => ({
+      ...previous,
+      [section]: previous[section].filter((_, index) => index !== itemIndex),
+    }))
+  }
+
+  const moveBulletedSectionItem = (
+    section: BulletedSectionName,
+    itemIndex: number,
+    direction: -1 | 1,
+  ) => {
+    setData((previous) => ({
+      ...previous,
+      [section]: moveItem(previous[section], itemIndex, itemIndex + direction),
+    }))
+  }
+
+  const addBulletedSectionBullet = (
+    section: BulletedSectionName,
+    itemIndex: number,
+  ) => {
+    setData((previous) => {
+      const items = [...previous[section]]
+      items[itemIndex] = {
+        ...items[itemIndex],
+        bullets: [...items[itemIndex].bullets, 'Describe this item'],
+      }
+      return { ...previous, [section]: items }
+    })
+  }
+
+  const removeBulletedSectionBullet = (
+    section: BulletedSectionName,
+    itemIndex: number,
+    bulletIndex: number,
+  ) => {
+    setData((previous) => {
+      const items = [...previous[section]]
+      const bullets = items[itemIndex].bullets.filter(
+        (_, index) => index !== bulletIndex,
+      )
+
+      items[itemIndex] = {
+        ...items[itemIndex],
+        bullets: bullets.length ? bullets : ['Describe this item'],
+      }
+
+      return { ...previous, [section]: items }
+    })
   }
 
   const exportPdf = async () => {
@@ -727,6 +970,268 @@ function App() {
       setIsExporting(false)
     }
   }
+
+  const renderBulletedSectionEditor = (
+    section: BulletedSectionName,
+    title: string,
+    itemLabel: string,
+    subtitleLabel: string,
+    defaultItem: BulletedSectionItem,
+  ) => (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-neutral-600">
+          {title}
+        </h3>
+        <button
+          className="rounded-xl border px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+          onClick={() => addBulletedSectionItem(section, defaultItem)}
+          type="button"
+        >
+          <span className="inline-flex items-center gap-1">
+            <Plus className="h-4 w-4" /> Add
+          </span>
+        </button>
+      </div>
+      {data[section].map((item, index) => (
+        <div
+          className="rounded-2xl border border-neutral-200 p-3"
+          key={`${section}-editor-${index}`}
+        >
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-sm font-semibold">
+              {itemLabel} {index + 1}
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                aria-label={`Move ${itemLabel.toLowerCase()} ${index + 1} up`}
+                className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
+                disabled={index === 0}
+                onClick={() => moveBulletedSectionItem(section, index, -1)}
+                title="Move up"
+                type="button"
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
+              <button
+                aria-label={`Move ${itemLabel.toLowerCase()} ${index + 1} down`}
+                className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
+                disabled={index === data[section].length - 1}
+                onClick={() => moveBulletedSectionItem(section, index, 1)}
+                title="Move down"
+                type="button"
+              >
+                <ArrowDown className="h-4 w-4" />
+              </button>
+              <button
+                aria-label={`Remove ${itemLabel.toLowerCase()} ${index + 1}`}
+                className="rounded-lg p-2 hover:bg-neutral-100"
+                onClick={() => removeBulletedSectionItem(section, index)}
+                title="Remove"
+                type="button"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <SidebarField
+              label="Title"
+              onChange={(event) =>
+                updateBulletedSectionItem(
+                  section,
+                  index,
+                  'title',
+                  event.target.value,
+                )
+              }
+              value={item.title}
+            />
+            <SidebarField
+              label={subtitleLabel}
+              onChange={(event) =>
+                updateBulletedSectionItem(
+                  section,
+                  index,
+                  'subtitle',
+                  event.target.value,
+                )
+              }
+              value={item.subtitle}
+            />
+            <SidebarField
+              label="Period"
+              onChange={(event) =>
+                updateBulletedSectionItem(
+                  section,
+                  index,
+                  'period',
+                  event.target.value,
+                )
+              }
+              value={item.period}
+            />
+            <div className="pt-2">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                  Bullets
+                </span>
+                <button
+                  className="inline-flex items-center gap-1 rounded-lg border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100"
+                  onClick={() => addBulletedSectionBullet(section, index)}
+                  type="button"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add bullet
+                </button>
+              </div>
+              <div className="space-y-2">
+                {item.bullets.map((bullet, bulletIndex) => (
+                  <div
+                    className="flex items-start gap-2"
+                    key={`${section}-${index}-bullet-editor-${bulletIndex}`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <SidebarField
+                        label={`Bullet ${bulletIndex + 1}`}
+                        onChange={(event) =>
+                          updateBulletedSectionBullet(
+                            section,
+                            index,
+                            bulletIndex,
+                            event.target.value,
+                          )
+                        }
+                        textarea
+                        value={bullet}
+                      />
+                    </div>
+                    <button
+                      aria-label={`Remove bullet ${bulletIndex + 1} from ${itemLabel.toLowerCase()} ${index + 1}`}
+                      className="mt-6 rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
+                      disabled={item.bullets.length === 1}
+                      onClick={() =>
+                        removeBulletedSectionBullet(section, index, bulletIndex)
+                      }
+                      title="Remove bullet"
+                      type="button"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </section>
+  )
+
+  const renderCertificationEditor = () => (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-neutral-600">
+          Certifications
+        </h3>
+        <button
+          className="rounded-xl border px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
+          onClick={() =>
+            addBulletedSectionItem('certifications', {
+              title: 'New Certification',
+              subtitle: 'Issuer',
+              period: '2024',
+              bullets: [],
+            })
+          }
+          type="button"
+        >
+          <span className="inline-flex items-center gap-1">
+            <Plus className="h-4 w-4" /> Add
+          </span>
+        </button>
+      </div>
+      {data.certifications.map((item, index) => (
+        <div
+          className="rounded-2xl border border-neutral-200 p-3"
+          key={`certification-editor-${index}`}
+        >
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-sm font-semibold">Certification {index + 1}</div>
+            <div className="flex items-center gap-1">
+              <button
+                aria-label={`Move certification ${index + 1} up`}
+                className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
+                disabled={index === 0}
+                onClick={() => moveBulletedSectionItem('certifications', index, -1)}
+                title="Move up"
+                type="button"
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
+              <button
+                aria-label={`Move certification ${index + 1} down`}
+                className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
+                disabled={index === data.certifications.length - 1}
+                onClick={() => moveBulletedSectionItem('certifications', index, 1)}
+                title="Move down"
+                type="button"
+              >
+                <ArrowDown className="h-4 w-4" />
+              </button>
+              <button
+                aria-label={`Remove certification ${index + 1}`}
+                className="rounded-lg p-2 hover:bg-neutral-100"
+                onClick={() => removeBulletedSectionItem('certifications', index)}
+                title="Remove"
+                type="button"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <SidebarField
+              label="Title"
+              onChange={(event) =>
+                updateBulletedSectionItem(
+                  'certifications',
+                  index,
+                  'title',
+                  event.target.value,
+                )
+              }
+              value={item.title}
+            />
+            <SidebarField
+              label="Issuer"
+              onChange={(event) =>
+                updateBulletedSectionItem(
+                  'certifications',
+                  index,
+                  'subtitle',
+                  event.target.value,
+                )
+              }
+              value={item.subtitle}
+            />
+            <SidebarField
+              label="Period"
+              onChange={(event) =>
+                updateBulletedSectionItem(
+                  'certifications',
+                  index,
+                  'period',
+                  event.target.value,
+                )
+              }
+              value={item.period}
+            />
+          </div>
+        </div>
+      ))}
+    </section>
+  )
 
   return (
     <div className="min-h-screen bg-neutral-100 text-neutral-900 print:bg-white">
@@ -866,35 +1371,25 @@ function App() {
               {data.skills.map((skill, index) => (
                 <div
                   className="rounded-2xl border border-neutral-200 p-3"
-                  key={`${skill.name}-${index}`}
+                  key={`skill-editor-${index}`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="w-full space-y-2">
                       <SidebarField
-                        label="Skill"
+                        label="Title"
                         onChange={(event) =>
-                          updateSkillName(index, event.target.value)
+                          updateSkillTitle(index, event.target.value)
                         }
-                        value={skill.name}
+                        value={skill.title}
                       />
-                      <label className="block space-y-1">
-                        <span className="text-xs font-medium text-neutral-600">
-                          Level (0-5)
-                        </span>
-                        <input
-                          className="w-full"
-                          max="5"
-                          min="0"
-                          onChange={(event) =>
-                            updateSkillLevel(index, event.target.value)
-                          }
-                          type="range"
-                          value={skill.level}
-                        />
-                        <div className="text-sm text-neutral-500">
-                          {skill.level}/5
-                        </div>
-                      </label>
+                      <SidebarField
+                        label="Skills (one per line)"
+                        onChange={(event) =>
+                          updateSkillBullets(index, event.target.value)
+                        }
+                        textarea
+                        value={skill.bullets.join('\n')}
+                      />
                     </div>
                     <div className="mt-1 flex flex-col gap-1">
                       <button
@@ -976,7 +1471,7 @@ function App() {
               {data.links.map((link, index) => (
                 <div
                   className="rounded-2xl border border-neutral-200 p-3"
-                  key={`${link.title}-${index}`}
+                  key={`link-editor-${index}`}
                 >
                   <div className="mb-2 flex items-center justify-between">
                     <div className="text-sm font-semibold">Link {index + 1}</div>
@@ -1026,7 +1521,7 @@ function App() {
               {data.experience.map((job, index) => (
                 <div
                   className="rounded-2xl border border-neutral-200 p-3"
-                  key={`${job.title}-${index}`}
+                  key={`job-editor-${index}`}
                 >
                   <div className="mb-2 flex items-center justify-between">
                     <div className="text-sm font-semibold">Job {index + 1}</div>
@@ -1084,25 +1579,69 @@ function App() {
                       }
                       value={job.period}
                     />
-                    {job.bullets.map((bullet, bulletIndex) => (
-                      <SidebarField
-                        key={`${bullet}-${bulletIndex}`}
-                        label={`Bullet ${bulletIndex + 1}`}
-                        onChange={(event) =>
-                          updateJobBullet(
-                            index,
-                            bulletIndex,
-                            event.target.value,
-                          )
-                        }
-                        textarea
-                        value={bullet}
-                      />
-                    ))}
+                    <div className="pt-2">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                          Bullets
+                        </span>
+                        <button
+                          className="inline-flex items-center gap-1 rounded-lg border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100"
+                          onClick={() => addJobBullet(index)}
+                          type="button"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          Add bullet
+                        </button>
+                      </div>
+                      <div className="space-y-2">
+                        {job.bullets.map((bullet, bulletIndex) => (
+                          <div
+                            className="flex items-start gap-2"
+                            key={`job-${index}-bullet-editor-${bulletIndex}`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <SidebarField
+                                label={`Bullet ${bulletIndex + 1}`}
+                                onChange={(event) =>
+                                  updateJobBullet(
+                                    index,
+                                    bulletIndex,
+                                    event.target.value,
+                                  )
+                                }
+                                textarea
+                                value={bullet}
+                              />
+                            </div>
+                            <button
+                              aria-label={`Remove bullet ${bulletIndex + 1} from job ${index + 1}`}
+                              className="mt-6 rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
+                              disabled={job.bullets.length === 1}
+                              onClick={() =>
+                                removeJobBullet(index, bulletIndex)
+                              }
+                              title="Remove bullet"
+                              type="button"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}
             </section>
+
+            {renderCertificationEditor()}
+
+            {renderBulletedSectionEditor('projects', 'Projects', 'Project', 'Role / Tech stack', {
+              title: 'New Project',
+              subtitle: 'Role / Tech stack',
+              period: '2024',
+              bullets: ['Describe the project impact'],
+            })}
           </div>
         </aside>
 
