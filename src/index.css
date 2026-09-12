@@ -38,3 +38,16 @@ input,
 textarea {
   font: inherit;
 }
+
+/*
+ * The editor chrome is deliberately not the document: ink for tool surfaces,
+ * white for anything you read or type into, one rule colour echoing the CV's
+ * own hairlines, and exactly two functional colours: red only for deletion, amber only for writing advice.
+ */
+@theme {
+  --color-ink: #1b2028;
+  --color-rule: #e3e6ea;
+  --color-muted: #667085;
+  --color-danger: #b42318;
+  --color-advice: #b45309;
+}

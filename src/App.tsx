@@ -1,673 +1,290 @@
 import {
-  type ChangeEvent,
-  type MouseEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from 'react'
 import {
-  ArrowDown,
-  ArrowUp,
   Download,
-  FileText,
+  Image as ImageIcon,
   Plus,
-  Save,
-  Trash2,
+  Redo2,
+  Undo2,
 } from 'lucide-react'
 import { toJpeg } from 'html-to-image'
 import jsPDF from 'jspdf'
 import './App.css'
+import { CVDocument } from './cv/render/Preview'
+import { getTemplate } from './cv/templates/presets'
+import { applyLayout } from './cv/templates/layout'
+import { PAGE_WIDTH } from './cv/templates/types'
+import { exportTextPdf } from './cv/pdf/exportTextPdf'
+import { pdfColorStyleOverrides } from './cv/pdfStyles'
+import { initialData } from './cv/initialData'
+import {
+  addDocument,
+  downloadJson,
+  loadDocument,
+  loadIndex,
+  parseImportedJson,
+  removeDocument,
+  saveDocument,
+  saveIndex,
+  touchDocument,
+} from './cv/storage'
+import type {
+  BulletedSectionItem,
+  BulletedSectionName,
+  Course,
+  CVData,
+  Education,
+  Job,
+  LinkItem,
+  PersonalInfo,
+  SimpleSectionName,
+} from './cv/types'
+import { moveItem, normalizeUrl } from './cv/utils'
+import { DocumentMenu } from './editor/DocumentMenu'
+import { TemplatePicker } from './editor/TemplatePicker'
+import { LayoutControls } from './editor/LayoutControls'
+import { Field, FieldPair } from './editor/Field'
+import { PhotoField } from './editor/PhotoField'
+import { FocusProvider } from './editor/FocusProvider'
+import { editorKeyForBlock, useFocus } from './editor/focusContext'
+import { type BulletIssue, countIssues, lintBullets } from './editor/lint'
+import { PreviewToolbar } from './editor/PreviewToolbar'
+import { MIN_ZOOM } from './editor/zoom'
+import { EmptySection, Section } from './editor/Section'
+import { SortableItem, SortableList, SortableRow } from './editor/Sortable'
+import { useAutosave } from './editor/useAutosave'
+import { useUndoableState } from './editor/useUndoableState'
 
-type PersonalInfo = {
-  fullName: string
-  title: string
-  address: string
-  phone: string
-  email: string
-  birth: string
-  birthPlace: string
-  nationality: string
+/** Field layout for sections whose items are just a few short text fields. */
+type SimpleSectionField = {
+  key: 'title' | 'period' | 'location'
+  label: string
+  textarea?: boolean
 }
 
-type Skill = {
-  title: string
-  bullets: string[]
+const educationFields: SimpleSectionField[] = [
+  { key: 'title', label: 'Degree and school', textarea: true },
+  { key: 'period', label: 'Period' },
+  { key: 'location', label: 'Location' },
+]
+
+const courseFields: SimpleSectionField[] = [
+  { key: 'title', label: 'Course and provider', textarea: true },
+  { key: 'period', label: 'Period' },
+]
+
+const newEducation: Education = {
+  title: 'New degree, school',
+  period: '2020 - 2024',
+  location: 'Yerevan',
 }
 
-type Job = {
-  title: string
-  location: string
-  period: string
-  bullets: string[]
+const newCourse: Course = {
+  title: 'New course, provider',
+  period: '2024',
 }
 
-type Education = {
-  title: string
-  period: string
-  location: string
+type SimpleSectionItem = Record<SimpleSectionField['key'], string>
+
+/**
+ * Education and Course differ only by which of these fields they carry, so the
+ * editor treats both as records and renders whichever fields it is given.
+ */
+function simpleItems(data: CVData, section: SimpleSectionName) {
+  return data[section] as SimpleSectionItem[]
 }
 
-type Course = {
-  title: string
-  period: string
-}
+const idsFor = (prefix: string, length: number) =>
+  Array.from({ length }, (_, index) => `${prefix}-${index}`)
 
-type BulletedSectionItem = {
-  title: string
-  subtitle: string
-  period: string
-  bullets: string[]
-}
-
-type LinkItem = {
-  title: string
-  url: string
-}
-
-type CVData = {
-  personal: PersonalInfo
-  profile: string
-  skills: Skill[]
-  hobbies: string
-  languages: string[]
-  links: LinkItem[]
-  experience: Job[]
-  education: Education[]
-  courses: Course[]
-  certifications: BulletedSectionItem[]
-  projects: BulletedSectionItem[]
-}
-
-type BulletedSectionName = 'certifications' | 'projects'
-
-const initialData: CVData = {
-  personal: {
-    fullName: 'VAHAN LULUKYAN',
-    title: 'FULL STACK DEVELOPER',
-    address: '5 Tumanyan 4apt., Yerevan, 0001, Armenia',
-    phone: '+374 91 78 76 76',
-    email: 'lulukyan@hotmail.com',
-    birth: '04.03.1988',
-    birthPlace: 'Yerevan',
-    nationality: 'Armenian',
-  },
-  profile:
-    'Experienced Web Developer with expertise in all phases of advanced web development. Strong understanding of user interface design, testing, and debugging. Proven ability to design, install, test, and maintain robust web systems. Possessing a diverse skillset including JavaScript, TypeScript, Node.js, NestJS, Angular, and proficiency in MongoDB, MySQL, and PostgreSQL databases. Effective self-manager with excellent teamwork and collaboration skills.',
-  skills: [
-    {
-      title: 'Backend',
-      bullets: ['Node.js, NestJS, Express'],
-    },
-    {
-      title: 'Frontend',
-      bullets: ['Angular, Next.js'],
-    },
-    {
-      title: 'Databases',
-      bullets: ['PostgreSQL, MongoDB, Redis'],
-    },
-    {
-      title: 'DevOps & Infrastructure',
-      bullets: ['Docker, Linux (CentOS, Ubuntu), Nginx', 'Server management, networking'],
-    },
-    {
-      title: 'Search & Caching',
-      bullets: ['Elasticsearch, Redis'],
-    },
-    {
-      title: 'Security',
-      bullets: ['Firewall configuration, Wazuh, SIEM basics', 'Cybersecurity practices, incident response'],
-    },
-    {
-      title: 'Other',
-      bullets: ['REST APIs, Microservices architecture'],
-    },
-  ],
-  hobbies: 'Hiking, Watching football',
-  languages: ['English', 'Russian', 'Armenian'],
-  links: [
-    { title: 'LinkedIn', url: '' },
-    { title: 'GitHub', url: '' },
-  ],
-  experience: [
-    {
-      title: 'Senior backend developer, IT Flame LLC',
-      location: 'Yerevan',
-      period: 'Sep 2021 - present',
-      bullets: [
-        'Primarily focused on backend development, with some frontend contributions.',
-        'Developed an e-commerce ecosystem utilizing NestJS APIs, Redis for caching and task scheduling, and ElasticSearch for search.',
-        'PostgreSQL served as the primary database.',
-        'Built the e-commerce platform redro.ru from the ground up.',
-      ],
-    },
-    {
-      title: 'Full Stack developer, Arpi Studio',
-      location: 'Yerevan',
-      period: 'Dec 2019 - Aug 2021',
-      bullets: [
-        'Collaborated across design, coding, testing, reporting, and debugging.',
-        'Managed front-end and back-end development using Node.js, Express.js, MongoDB, Pug/EJS, and Angular.',
-        'Continuously evaluated and learned emerging web development standards and technologies.',
-        'Developed websites from scratch and worked on rebranding projects.',
-      ],
-    },
-    {
-      title: 'Full Stack Web Developer, Concent',
-      location: 'Yerevan',
-      period: 'Sep 2017 - Nov 2019',
-      bullets: [
-        'Designed, developed, tested, and deployed web applications.',
-        'Provided troubleshooting and remediation.',
-        'Developed RESTful APIs for cryptocurrencies.',
-        'Translated client requirements into functional designs.',
-      ],
-    },
-    {
-      title: 'Web developer, USArmenia TV / Interlur LLC',
-      location: 'Yerevan',
-      period: 'Sep 2015 - May 2016',
-      bullets: ['Worked as a web developer to design, code, and test websites.'],
-    },
-    {
-      title: 'Web Developer',
-      location: 'Yerevan',
-      period: 'Aug 2013 - Aug 2015',
-      bullets: [
-        'Collaborated effectively as a team member in all phases of development.',
-        'Continuously evaluated and learned about new web development standards and technologies.',
-      ],
-    },
-    {
-      title: 'Junior Developer, VXSoft',
-      location: 'Yerevan',
-      period: 'Aug 2011 - Jul 2013',
-      bullets: [
-        'Contributed to the development of software for the State Register Agency of Armenia.',
-        'Resolved website issues including broken links, typos, and formatting errors.',
-        'Collaborated in testing and debugging and communicated with customers.',
-      ],
-    },
-  ],
-  education: [
-    {
-      title: 'Bachelor of Mechanical Faculty, Armenian State Engineering University',
-      period: 'Aug 2005 - Aug 2010',
-      location: 'Yerevan',
-    },
-    {
-      title: 'High School',
-      period: 'Sep 1995 - May 2005',
-      location: 'Yerevan',
-    },
-  ],
-  courses: [
-    {
-      title: 'Javascript, Microsoft Innovation Center',
-      period: 'Jun 2017 - Sep 2017',
-    },
-  ],
+const emptyCV: CVData = {
+  ...initialData,
+  personal: { ...initialData.personal, fullName: 'Your Name', title: 'Your title' },
+  profile: '',
+  experience: [],
+  education: [],
+  courses: [],
   certifications: [],
   projects: [],
 }
 
-const storageKey = 'cv-editor-data'
+function Editor() {
+  const [bootstrap] = useState(() => {
+    const index = loadIndex()
 
-const sectionTitle =
-  'text-[11px] font-bold uppercase leading-3 tracking-[0.38em] text-neutral-900'
+    return { index, data: loadDocument(index.activeId) }
+  })
 
-const pdfColorStyleOverrides = {
-  '--color-neutral-50': '#fafafa',
-  '--color-neutral-100': '#f5f5f5',
-  '--color-neutral-200': '#e5e5e5',
-  '--color-neutral-300': '#d4d4d4',
-  '--color-neutral-400': '#a3a3a3',
-  '--color-neutral-500': '#737373',
-  '--color-neutral-600': '#525252',
-  '--color-neutral-700': '#404040',
-  '--color-neutral-800': '#262626',
-  '--color-neutral-900': '#171717',
-  '--color-neutral-950': '#0a0a0a',
-}
+  const [index, setIndex] = useState(bootstrap.index)
+  const {
+    value: data,
+    setValue: setData,
+    reset: resetData,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+  } = useUndoableState<CVData>(bootstrap.data)
 
-type SidebarFieldProps = {
-  label: string
-  value: string
-  onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void
-  textarea?: boolean
-}
-
-function SidebarField({
-  label,
-  value,
-  onChange,
-  textarea = false,
-}: SidebarFieldProps) {
-  return (
-    <label className="block space-y-1">
-      <span className="text-xs font-medium text-neutral-600">{label}</span>
-      {textarea ? (
-        <textarea
-          className="w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-700"
-          onChange={onChange}
-          rows={3}
-          value={value}
-        />
-      ) : (
-        <input
-          className="w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-700"
-          onChange={onChange}
-          value={value}
-        />
-      )}
-    </label>
-  )
-}
-
-type BulletListProps = {
-  bullets: string[]
-}
-
-function BulletList({ bullets }: BulletListProps) {
-  return (
-    <div className="cv-bullet-list">
-      {bullets.map((bullet, bulletIndex) => (
-        <div className="cv-bullet-row" key={`${bullet}-${bulletIndex}`}>
-          <span className="cv-bullet-marker" />
-          <div className="cv-bullet-text">{bullet}</div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-type BulletedSectionProps = {
-  items: BulletedSectionItem[]
-}
-
-type CertificationSectionProps = {
-  items: BulletedSectionItem[]
-}
-
-function CertificationSectionItems({ items }: CertificationSectionProps) {
-  return (
-    <div className="mt-5 space-y-3">
-      {items.map((item, index) => {
-        const parts = [item.title, item.subtitle, item.period].filter(Boolean)
-
-        return (
-          <div
-            className="text-[11px] leading-[16px]"
-            key={`${item.title}-${index}`}
-          >
-            {parts.join(' | ')}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function BulletedSectionItems({ items }: BulletedSectionProps) {
-  return (
-    <div className="mt-5 space-y-[28px]">
-      {items.map((item, index) => {
-        const bullets = item.bullets.filter(Boolean)
-
-        return (
-          <div key={`${item.title}-${index}`}>
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="max-w-[320px] text-[13px] font-semibold leading-[16px]">
-                  {item.title}
-                </div>
-                {item.subtitle ? (
-                  <div className="text-[11px] leading-[15px]">
-                    {item.subtitle}
-                  </div>
-                ) : null}
-                {item.period ? (
-                  <div className="text-[11px] leading-[15px]">{item.period}</div>
-                ) : null}
-              </div>
-            </div>
-            {bullets.length ? <BulletList bullets={bullets} /> : null}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function normalizeUrl(url: string) {
-  const trimmedUrl = url.trim()
-
-  if (!trimmedUrl) return ''
-  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmedUrl)) return trimmedUrl
-
-  return `https://${trimmedUrl}`
-}
-
-function openInBlankPage(event: MouseEvent<HTMLAnchorElement>, url: string) {
-  event.preventDefault()
-  window.open(normalizeUrl(url), '_blank', 'noopener,noreferrer')
-}
-
-function moveItem<T>(items: T[], fromIndex: number, toIndex: number) {
-  if (toIndex < 0 || toIndex >= items.length) return items
-
-  const nextItems = [...items]
-  const [item] = nextItems.splice(fromIndex, 1)
-  nextItems.splice(toIndex, 0, item)
-
-  return nextItems
-}
-
-function normalizeSavedData(data: CVData) {
-  const normalizedSkills = Array.isArray(data.skills)
-    ? data.skills.map((skill) => {
-        const item = skill as Record<string, unknown>
-
-        if (typeof item.title === 'string' && Array.isArray(item.bullets)) {
-          return {
-            title: item.title,
-            bullets: item.bullets.filter(
-              (bullet): bullet is string => typeof bullet === 'string' && Boolean(bullet),
-            ),
-          }
-        }
-
-        if (typeof item.name === 'string') {
-          return {
-            title: item.name,
-            bullets: [],
-          }
-        }
-
-        return {
-          title: '',
-          bullets: [],
-        }
-      })
-    : initialData.skills
-
-  return {
-    ...initialData,
-    ...data,
-    personal: { ...initialData.personal, ...data.personal },
-    skills: normalizedSkills,
-    links: Array.isArray(data.links)
-      ? data.links.map((link) =>
-          typeof link === 'string' ? { title: link, url: '' } : link,
-        )
-      : initialData.links,
-  }
-}
-
-function loadSavedData() {
-  try {
-    const savedData = window.localStorage.getItem(storageKey)
-
-    if (!savedData) return initialData
-
-    return normalizeSavedData(JSON.parse(savedData) as CVData)
-  } catch {
-    return initialData
-  }
-}
-
-type CVPageProps = {
-  data: CVData
-  secondPage?: boolean
-}
-
-function CVPage({ data, secondPage = false }: CVPageProps) {
-  return (
-    <div
-      className="cv-page mx-auto mb-8 w-[794px] bg-white text-neutral-900 shadow-2xl print:mb-0 print:shadow-none"
-      data-cv-page="true"
-      style={{ minHeight: '1123px' }}
-    >
-      {!secondPage ? (
-        <div className="grid min-h-[1123px] grid-cols-[240px_1fr] bg-[#f2f2f2]">
-          <aside className="bg-[#e7e7e7] pb-10 pl-[60px] pr-7 pt-[220px]">
-            <div className="space-y-[34px]">
-              <div>
-                <h3 className={sectionTitle}>Info</h3>
-                <div className="mt-3 h-px bg-neutral-500" />
-                <div className="mt-4 space-y-[14px] text-[10px] leading-[14px]">
-                  <div>
-                    <div className="text-[8.5px] font-bold uppercase leading-[11px]">
-                      Address
-                    </div>
-                    <div>{data.personal.address}</div>
-                  </div>
-                  <div>
-                    <div className="text-[8.5px] font-bold uppercase leading-[11px]">
-                      Phone
-                    </div>
-                    <div>{data.personal.phone}</div>
-                  </div>
-                  <div>
-                    <div className="text-[8.5px] font-bold uppercase leading-[11px]">
-                      Email
-                    </div>
-                    <div className="break-all">{data.personal.email}</div>
-                  </div>
-                  <div>
-                    <div className="text-[8.5px] font-bold uppercase leading-[11px]">
-                      Date / Place of Birth
-                    </div>
-                    <div>{data.personal.birth}</div>
-                    <div>{data.personal.birthPlace}</div>
-                  </div>
-                  <div>
-                    <div className="text-[8.5px] font-bold uppercase leading-[11px]">
-                      Nationality
-                    </div>
-                    <div>{data.personal.nationality}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className={sectionTitle}>Skills</h3>
-                <div className="mt-3 h-px bg-neutral-500" />
-                <div className="cv-skill-list">
-                  {data.skills.map((skill, index) => (
-                    <div className="cv-skill-item" key={`${skill.title}-${index}`}>
-                      <div className="cv-skill-title">{skill.title}:</div>
-                      <BulletList bullets={skill.bullets} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <h3 className={sectionTitle}>Hobbies</h3>
-                <div className="mt-3 h-px bg-neutral-500" />
-                <p className="mt-4 text-[11px] leading-[16px]">{data.hobbies}</p>
-              </div>
-            </div>
-          </aside>
-
-          <main className="relative px-8 pb-10 pt-[230px]">
-            <div className="absolute left-1/2 top-14 w-[380px] -translate-x-1/2 border-2 border-neutral-500 bg-[#f2f2f2] px-8 py-6 text-center">
-              <h1 className="text-[24px] font-extrabold leading-7 tracking-[0.17em]">
-                {data.personal.fullName}
-              </h1>
-              <div className="mt-3 text-[14px] leading-5 tracking-[0.12em]">
-                {data.personal.title}
-              </div>
-            </div>
-
-            <section>
-              <h3 className={sectionTitle}>Profile</h3>
-              <div className="mt-3 h-px bg-neutral-500" />
-              <p className="mt-4 whitespace-pre-line text-[11px] leading-[17px]">
-                {data.profile}
-              </p>
-            </section>
-
-            <section className="mt-8">
-              <h3 className={sectionTitle}>Employment History</h3>
-              <div className="mt-3 h-px bg-neutral-500" />
-              <div className="mt-5 space-y-[30px]">
-                {data.experience.slice(0, 3).map((job, index) => (
-                  <div key={`${job.title}-${index}`}>
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="text-[13px] font-bold leading-[15px]">
-                          {job.title}
-                        </div>
-                        <div className="text-[11px] leading-[15px]">{job.period}</div>
-                      </div>
-                      <div className="pt-0.5 text-[10px] leading-[14px]">
-                        {job.location}
-                      </div>
-                    </div>
-                    <BulletList bullets={job.bullets} />
-                  </div>
-                ))}
-              </div>
-            </section>
-          </main>
-        </div>
-      ) : (
-        <div className="grid min-h-[1123px] grid-cols-[240px_1fr] bg-[#f2f2f2]">
-          <aside className="bg-[#e7e7e7] pb-10 pl-[60px] pr-7 pt-10">
-            <div className="space-y-[34px]">
-              <section>
-                <h3 className={sectionTitle}>Languages</h3>
-                <div className="mt-3 h-px bg-neutral-500" />
-                <div className="mt-4 space-y-[18px] text-[11px] leading-[13px]">
-                  {data.languages.map((language, index) => (
-                    <div key={`${language}-${index}`}>{language}</div>
-                  ))}
-                </div>
-              </section>
-
-              <section className="mt-8">
-                <h3 className={sectionTitle}>Links</h3>
-                <div className="mt-3 h-px bg-neutral-500" />
-                <div className="mt-4 space-y-2 text-[11px] leading-[14px]">
-                  {data.links.map((link, index) => (
-                    <div key={`${link.title}-${index}`}>
-                      {link.url ? (
-                        <a
-                          className="text-neutral-900 no-underline"
-                          data-cv-link="true"
-                          href={normalizeUrl(link.url)}
-                          onClick={(event) => openInBlankPage(event, link.url)}
-                          rel="noreferrer"
-                          target="_blank"
-                        >
-                          {link.title || link.url}
-                        </a>
-                      ) : (
-                        <span>{link.title}</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </div>
-          </aside>
-
-          <main className="px-8 pb-12 pt-8">
-            <section>
-              <div className="space-y-[30px]">
-                {data.experience.slice(3).map((job, index) => (
-                  <div key={`${job.title}-${index}`}>
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="text-[13px] font-bold leading-[15px]">
-                          {job.title}
-                        </div>
-                        <div className="text-[11px] leading-[15px]">{job.period}</div>
-                      </div>
-                      <div className="pt-0.5 text-[10px] leading-[14px]">
-                        {job.location}
-                      </div>
-                    </div>
-                    <BulletList bullets={job.bullets} />
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="mt-10">
-              <h3 className={sectionTitle}>Education</h3>
-              <div className="mt-3 h-px bg-neutral-500" />
-              <div className="mt-5 space-y-[28px]">
-                {data.education.map((item, index) => (
-                  <div key={`${item.title}-${index}`}>
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="max-w-[320px] text-[13px] font-semibold leading-[16px]">
-                          {item.title}
-                        </div>
-                        <div className="text-[11px] leading-[15px]">{item.period}</div>
-                      </div>
-                      <div className="pt-0.5 text-[10px] leading-[14px] text-neutral-700">
-                        {item.location}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="mt-10">
-              <h3 className={sectionTitle}>Courses</h3>
-              <div className="mt-3 h-px bg-neutral-500" />
-              <div className="mt-5 space-y-4">
-                {data.courses.map((item, index) => (
-                  <div key={`${item.title}-${index}`}>
-                    <div className="text-[13px] font-semibold leading-[16px]">
-                      {item.title}
-                    </div>
-                    <div className="text-[11px] leading-[15px]">{item.period}</div>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            {data.certifications.length ? (
-              <section className="mt-10">
-                <h3 className={sectionTitle}>Certifications</h3>
-                <div className="mt-3 h-px bg-neutral-500" />
-                <CertificationSectionItems items={data.certifications} />
-              </section>
-            ) : null}
-
-            {data.projects.length ? (
-              <section className="mt-10">
-                <h3 className={sectionTitle}>Projects</h3>
-                <div className="mt-3 h-px bg-neutral-500" />
-                <BulletedSectionItems items={data.projects} />
-              </section>
-            ) : null}
-          </main>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function App() {
-  const [data, setData] = useState<CVData>(() => loadSavedData())
   const exportRef = useRef<HTMLDivElement | null>(null)
+  const previewRef = useRef<HTMLDivElement | null>(null)
+  const scaledRef = useRef<HTMLDivElement | null>(null)
   const [isExporting, setIsExporting] = useState(false)
-  const [saveStatus, setSaveStatus] = useState('')
+  const [pageCount, setPageCount] = useState(1)
+  const [zoom, setZoom] = useState(1)
+  const [naturalHeight, setNaturalHeight] = useState(0)
 
-  const pageCount = useMemo(() => 2, [])
+  const { requestFocus } = useFocus()
+  const baseTemplate = getTemplate(data.templateId)
+  const template = useMemo(
+    () => applyLayout(baseTemplate, data.layout),
+    [baseTemplate, data.layout],
+  )
 
-  const saveData = () => {
-    window.localStorage.setItem(storageKey, JSON.stringify(data))
-    setSaveStatus('Saved')
-    window.setTimeout(() => setSaveStatus(''), 1800)
+  const activeName =
+    index.documents.find((entry) => entry.id === index.activeId)?.name ?? 'CV'
+
+  const handleSave = useCallback(
+    (value: CVData) => {
+      saveDocument(index.activeId, value)
+      setIndex((previous) => touchDocument(previous, index.activeId))
+    },
+    [index.activeId],
+  )
+
+  const { state: saveState, flush } = useAutosave({
+    value: data,
+    key: index.activeId,
+    onSave: handleSave,
+  })
+
+  useEffect(() => {
+    saveIndex(index)
+  }, [index])
+
+  const handlePageCountChange = useCallback((nextPageCount: number) => {
+    setPageCount(nextPageCount)
+  }, [])
+
+  const handleSelectBlock = useCallback(
+    (blockKey: string) => requestFocus(editorKeyForBlock(blockKey)),
+    [requestFocus],
+  )
+
+  /* ---------------------------------------------------------------- zoom */
+
+  useLayoutEffect(() => {
+    const element = scaledRef.current
+
+    if (!element) return
+
+    const measure = () => setNaturalHeight(element.offsetHeight)
+    const observer = new ResizeObserver(measure)
+
+    observer.observe(element)
+    measure()
+
+    return () => observer.disconnect()
+  }, [])
+
+  const fitToWidth = useCallback(() => {
+    const available = (previewRef.current?.clientWidth ?? PAGE_WIDTH) - 48
+
+    setZoom(Math.min(1, Math.max(MIN_ZOOM, available / PAGE_WIDTH)))
+  }, [])
+
+  // Shrink to fit when the page would overflow, but never zoom back in on the
+  // user's behalf - once they pick a level it is theirs.
+  useEffect(() => {
+    const clampToWidth = () => {
+      const available = (previewRef.current?.clientWidth ?? PAGE_WIDTH) - 48
+
+      setZoom((previous) =>
+        PAGE_WIDTH * previous > available
+          ? Math.max(MIN_ZOOM, available / PAGE_WIDTH)
+          : previous,
+      )
+    }
+
+    clampToWidth()
+    window.addEventListener('resize', clampToWidth)
+
+    return () => window.removeEventListener('resize', clampToWidth)
+  }, [])
+
+  /* ------------------------------------------------------------ shortcuts */
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!event.metaKey && !event.ctrlKey) return
+
+      const key = event.key.toLowerCase()
+
+      if (key === 'z') {
+        event.preventDefault()
+        if (event.shiftKey) redo()
+        else undo()
+      } else if (key === 'y') {
+        event.preventDefault()
+        redo()
+      } else if (key === 's') {
+        event.preventDefault()
+        flush()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [undo, redo, flush])
+
+  /* ------------------------------------------------------------ documents */
+
+  const switchDocument = (id: string) => {
+    flush()
+    setIndex((previous) => ({ ...previous, activeId: id }))
+    resetData(loadDocument(id))
   }
+
+  const createDocument = (name: string, seed: CVData) => {
+    flush()
+    setIndex((previous) => {
+      const { index: nextIndex } = addDocument(previous, name, seed)
+
+      return nextIndex
+    })
+    resetData(seed)
+  }
+
+  const deleteActiveDocument = () => {
+    setIndex((previous) => {
+      const nextIndex = removeDocument(previous, previous.activeId)
+
+      resetData(loadDocument(nextIndex.activeId))
+
+      return nextIndex
+    })
+  }
+
+  const importDocument = async (file: File) => {
+    try {
+      const { name, data: imported } = parseImportedJson(await file.text())
+
+      createDocument(name, imported)
+    } catch {
+      window.alert(
+        'That file could not be read as a CV. Expected JSON exported from this editor.',
+      )
+    }
+  }
+
+  /* ----------------------------------------------------------------- data */
 
   const updatePersonal = (key: keyof PersonalInfo, value: string) => {
     setData((previous) => ({
@@ -676,24 +293,21 @@ function App() {
     }))
   }
 
-  const updateSkillTitle = (index: number, value: string) => {
+  const updateSkill = (index: number, key: 'title' | 'bullets', value: string) => {
     setData((previous) => {
       const skills = [...previous.skills]
-      skills[index] = { ...skills[index], title: value }
-      return { ...previous, skills }
-    })
-  }
 
-  const updateSkillBullets = (index: number, value: string) => {
-    setData((previous) => {
-      const skills = [...previous.skills]
-      skills[index] = {
-        ...skills[index],
-        bullets: value
-          .split('\n')
-          .map((item) => item.trim())
-          .filter(Boolean),
-      }
+      skills[index] =
+        key === 'title'
+          ? { ...skills[index], title: value }
+          : {
+              ...skills[index],
+              bullets: value
+                .split('\n')
+                .map((item) => item.trim())
+                .filter(Boolean),
+            }
+
       return { ...previous, skills }
     })
   }
@@ -701,7 +315,7 @@ function App() {
   const addSkill = () => {
     setData((previous) => ({
       ...previous,
-      skills: [...previous.skills, { title: 'New Section', bullets: ['New skill'] }],
+      skills: [...previous.skills, { title: 'New group', bullets: ['New skill'] }],
     }))
   }
 
@@ -712,10 +326,10 @@ function App() {
     }))
   }
 
-  const moveSkill = (index: number, direction: -1 | 1) => {
+  const reorderSkills = (fromIndex: number, toIndex: number) => {
     setData((previous) => ({
       ...previous,
-      skills: moveItem(previous.skills, index, index + direction),
+      skills: moveItem(previous.skills, fromIndex, toIndex),
     }))
   }
 
@@ -730,7 +344,7 @@ function App() {
   const addLink = () => {
     setData((previous) => ({
       ...previous,
-      links: [...previous.links, { title: 'New Link', url: '' }],
+      links: [...previous.links, { title: 'New link', url: '' }],
     }))
   }
 
@@ -738,6 +352,13 @@ function App() {
     setData((previous) => ({
       ...previous,
       links: previous.links.filter((_, linkIndex) => linkIndex !== index),
+    }))
+  }
+
+  const reorderLinks = (fromIndex: number, toIndex: number) => {
+    setData((previous) => ({
+      ...previous,
+      links: moveItem(previous.links, fromIndex, toIndex),
     }))
   }
 
@@ -768,7 +389,7 @@ function App() {
       const experience = [...previous.experience]
       experience[jobIndex] = {
         ...experience[jobIndex],
-        bullets: [...experience[jobIndex].bullets, 'Describe your responsibility'],
+        bullets: [...experience[jobIndex].bullets, ''],
       }
       return { ...previous, experience }
     })
@@ -777,13 +398,29 @@ function App() {
   const removeJobBullet = (jobIndex: number, bulletIndex: number) => {
     setData((previous) => {
       const experience = [...previous.experience]
-      const bullets = experience[jobIndex].bullets.filter(
-        (_, index) => index !== bulletIndex,
-      )
 
       experience[jobIndex] = {
         ...experience[jobIndex],
-        bullets: bullets.length ? bullets : ['Describe your responsibility'],
+        bullets: experience[jobIndex].bullets.filter(
+          (_, index) => index !== bulletIndex,
+        ),
+      }
+
+      return { ...previous, experience }
+    })
+  }
+
+  const reorderJobBullets = (
+    jobIndex: number,
+    fromIndex: number,
+    toIndex: number,
+  ) => {
+    setData((previous) => {
+      const experience = [...previous.experience]
+
+      experience[jobIndex] = {
+        ...experience[jobIndex],
+        bullets: moveItem(experience[jobIndex].bullets, fromIndex, toIndex),
       }
 
       return { ...previous, experience }
@@ -796,10 +433,10 @@ function App() {
       experience: [
         ...previous.experience,
         {
-          title: 'New Position',
+          title: 'New position',
           location: 'Yerevan',
           period: '2024 - present',
-          bullets: ['Describe your responsibility'],
+          bullets: [''],
         },
       ],
     }))
@@ -812,10 +449,57 @@ function App() {
     }))
   }
 
-  const moveJob = (index: number, direction: -1 | 1) => {
+  const reorderJobs = (fromIndex: number, toIndex: number) => {
     setData((previous) => ({
       ...previous,
-      experience: moveItem(previous.experience, index, index + direction),
+      experience: moveItem(previous.experience, fromIndex, toIndex),
+    }))
+  }
+
+  const updateSimpleSectionItem = (
+    section: SimpleSectionName,
+    itemIndex: number,
+    key: SimpleSectionField['key'],
+    value: string,
+  ) => {
+    setData((previous) => ({
+      ...previous,
+      [section]: simpleItems(previous, section).map((item, index) =>
+        index === itemIndex ? { ...item, [key]: value } : item,
+      ),
+    }))
+  }
+
+  const addSimpleSectionItem = (
+    section: SimpleSectionName,
+    item: Education | Course,
+  ) => {
+    setData((previous) => ({
+      ...previous,
+      [section]: [...previous[section], item],
+    }))
+  }
+
+  const removeSimpleSectionItem = (
+    section: SimpleSectionName,
+    itemIndex: number,
+  ) => {
+    setData((previous) => ({
+      ...previous,
+      [section]: simpleItems(previous, section).filter(
+        (_, index) => index !== itemIndex,
+      ),
+    }))
+  }
+
+  const reorderSimpleSection = (
+    section: SimpleSectionName,
+    fromIndex: number,
+    toIndex: number,
+  ) => {
+    setData((previous) => ({
+      ...previous,
+      [section]: moveItem(simpleItems(previous, section), fromIndex, toIndex),
     }))
   }
 
@@ -867,14 +551,14 @@ function App() {
     }))
   }
 
-  const moveBulletedSectionItem = (
+  const reorderBulletedSection = (
     section: BulletedSectionName,
-    itemIndex: number,
-    direction: -1 | 1,
+    fromIndex: number,
+    toIndex: number,
   ) => {
     setData((previous) => ({
       ...previous,
-      [section]: moveItem(previous[section], itemIndex, itemIndex + direction),
+      [section]: moveItem(previous[section], fromIndex, toIndex),
     }))
   }
 
@@ -886,7 +570,7 @@ function App() {
       const items = [...previous[section]]
       items[itemIndex] = {
         ...items[itemIndex],
-        bullets: [...items[itemIndex].bullets, 'Describe this item'],
+        bullets: [...items[itemIndex].bullets, ''],
       }
       return { ...previous, [section]: items }
     })
@@ -899,23 +583,53 @@ function App() {
   ) => {
     setData((previous) => {
       const items = [...previous[section]]
-      const bullets = items[itemIndex].bullets.filter(
-        (_, index) => index !== bulletIndex,
-      )
 
       items[itemIndex] = {
         ...items[itemIndex],
-        bullets: bullets.length ? bullets : ['Describe this item'],
+        bullets: items[itemIndex].bullets.filter(
+          (_, index) => index !== bulletIndex,
+        ),
       }
 
       return { ...previous, [section]: items }
     })
   }
 
-  const exportPdf = async () => {
+  const reorderBulletedSectionBullets = (
+    section: BulletedSectionName,
+    itemIndex: number,
+    fromIndex: number,
+    toIndex: number,
+  ) => {
+    setData((previous) => {
+      const items = [...previous[section]]
+
+      items[itemIndex] = {
+        ...items[itemIndex],
+        bullets: moveItem(items[itemIndex].bullets, fromIndex, toIndex),
+      }
+
+      return { ...previous, [section]: items }
+    })
+  }
+
+  /* --------------------------------------------------------------- export */
+
+  const exportPdf = () => {
+    void exportTextPdf(data, template)
+  }
+
+  const exportImagePdf = async () => {
     if (!exportRef.current) return
 
+    const restoreZoom = zoom
+
     setIsExporting(true)
+    setZoom(1)
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    )
+
     try {
       const pdf = new jsPDF('p', 'pt', 'a4')
       const pages = Array.from(
@@ -930,10 +644,7 @@ function App() {
           pixelRatio: 2,
           quality: 0.94,
           skipFonts: true,
-          style: {
-            ...pdfColorStyleOverrides,
-            margin: '0',
-          },
+          style: { ...pdfColorStyleOverrides, margin: '0' },
           width: pages[index].offsetWidth,
         })
         const pageWidth = pdf.internal.pageSize.getWidth()
@@ -965,276 +676,127 @@ function App() {
         }
       }
 
-      pdf.save(`${data.personal.fullName.replace(/\s+/g, '_')}_CV.pdf`)
+      pdf.save(`${data.personal.fullName.replace(/\s+/g, '_') || 'CV'}_CV.pdf`)
     } finally {
+      setZoom(restoreZoom)
       setIsExporting(false)
     }
   }
 
-  const renderBulletedSectionEditor = (
-    section: BulletedSectionName,
-    title: string,
-    itemLabel: string,
-    subtitleLabel: string,
-    defaultItem: BulletedSectionItem,
-  ) => (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-neutral-600">
-          {title}
-        </h3>
-        <button
-          className="rounded-xl border px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
-          onClick={() => addBulletedSectionItem(section, defaultItem)}
-          type="button"
-        >
-          <span className="inline-flex items-center gap-1">
-            <Plus className="h-4 w-4" /> Add
-          </span>
-        </button>
-      </div>
-      {data[section].map((item, index) => (
-        <div
-          className="rounded-2xl border border-neutral-200 p-3"
-          key={`${section}-editor-${index}`}
-        >
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-sm font-semibold">
-              {itemLabel} {index + 1}
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                aria-label={`Move ${itemLabel.toLowerCase()} ${index + 1} up`}
-                className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
-                disabled={index === 0}
-                onClick={() => moveBulletedSectionItem(section, index, -1)}
-                title="Move up"
-                type="button"
-              >
-                <ArrowUp className="h-4 w-4" />
-              </button>
-              <button
-                aria-label={`Move ${itemLabel.toLowerCase()} ${index + 1} down`}
-                className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
-                disabled={index === data[section].length - 1}
-                onClick={() => moveBulletedSectionItem(section, index, 1)}
-                title="Move down"
-                type="button"
-              >
-                <ArrowDown className="h-4 w-4" />
-              </button>
-              <button
-                aria-label={`Remove ${itemLabel.toLowerCase()} ${index + 1}`}
-                className="rounded-lg p-2 hover:bg-neutral-100"
-                onClick={() => removeBulletedSectionItem(section, index)}
-                title="Remove"
-                type="button"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-          <div className="space-y-2">
-            <SidebarField
-              label="Title"
-              onChange={(event) =>
-                updateBulletedSectionItem(
-                  section,
-                  index,
-                  'title',
-                  event.target.value,
-                )
-              }
-              value={item.title}
-            />
-            <SidebarField
-              label={subtitleLabel}
-              onChange={(event) =>
-                updateBulletedSectionItem(
-                  section,
-                  index,
-                  'subtitle',
-                  event.target.value,
-                )
-              }
-              value={item.subtitle}
-            />
-            <SidebarField
-              label="Period"
-              onChange={(event) =>
-                updateBulletedSectionItem(
-                  section,
-                  index,
-                  'period',
-                  event.target.value,
-                )
-              }
-              value={item.period}
-            />
-            <div className="pt-2">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">
-                  Bullets
-                </span>
-                <button
-                  className="inline-flex items-center gap-1 rounded-lg border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100"
-                  onClick={() => addBulletedSectionBullet(section, index)}
-                  type="button"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Add bullet
-                </button>
-              </div>
-              <div className="space-y-2">
-                {item.bullets.map((bullet, bulletIndex) => (
-                  <div
-                    className="flex items-start gap-2"
-                    key={`${section}-${index}-bullet-editor-${bulletIndex}`}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <SidebarField
-                        label={`Bullet ${bulletIndex + 1}`}
-                        onChange={(event) =>
-                          updateBulletedSectionBullet(
-                            section,
-                            index,
-                            bulletIndex,
-                            event.target.value,
-                          )
-                        }
-                        textarea
-                        value={bullet}
-                      />
-                    </div>
-                    <button
-                      aria-label={`Remove bullet ${bulletIndex + 1} from ${itemLabel.toLowerCase()} ${index + 1}`}
-                      className="mt-6 rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
-                      disabled={item.bullets.length === 1}
-                      onClick={() =>
-                        removeBulletedSectionBullet(section, index, bulletIndex)
-                      }
-                      title="Remove bullet"
-                      type="button"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      ))}
-    </section>
-  )
+  /* --------------------------------------------------------------- render */
 
-  const renderCertificationEditor = () => (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-neutral-600">
-          Certifications
-        </h3>
-        <button
-          className="rounded-xl border px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
-          onClick={() =>
-            addBulletedSectionItem('certifications', {
-              title: 'New Certification',
-              subtitle: 'Issuer',
-              period: '2024',
-              bullets: [],
-            })
-          }
-          type="button"
-        >
-          <span className="inline-flex items-center gap-1">
-            <Plus className="h-4 w-4" /> Add
-          </span>
-        </button>
-      </div>
-      {data.certifications.map((item, index) => (
-        <div
-          className="rounded-2xl border border-neutral-200 p-3"
-          key={`certification-editor-${index}`}
-        >
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-sm font-semibold">Certification {index + 1}</div>
-            <div className="flex items-center gap-1">
-              <button
-                aria-label={`Move certification ${index + 1} up`}
-                className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
-                disabled={index === 0}
-                onClick={() => moveBulletedSectionItem('certifications', index, -1)}
-                title="Move up"
-                type="button"
-              >
-                <ArrowUp className="h-4 w-4" />
-              </button>
-              <button
-                aria-label={`Move certification ${index + 1} down`}
-                className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
-                disabled={index === data.certifications.length - 1}
-                onClick={() => moveBulletedSectionItem('certifications', index, 1)}
-                title="Move down"
-                type="button"
-              >
-                <ArrowDown className="h-4 w-4" />
-              </button>
-              <button
-                aria-label={`Remove certification ${index + 1}`}
-                className="rounded-lg p-2 hover:bg-neutral-100"
-                onClick={() => removeBulletedSectionItem('certifications', index)}
-                title="Remove"
-                type="button"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-          <div className="space-y-2">
-            <SidebarField
-              label="Title"
-              onChange={(event) =>
-                updateBulletedSectionItem(
-                  'certifications',
-                  index,
-                  'title',
-                  event.target.value,
-                )
-              }
-              value={item.title}
-            />
-            <SidebarField
-              label="Issuer"
-              onChange={(event) =>
-                updateBulletedSectionItem(
-                  'certifications',
-                  index,
-                  'subtitle',
-                  event.target.value,
-                )
-              }
-              value={item.subtitle}
-            />
-            <SidebarField
-              label="Period"
-              onChange={(event) =>
-                updateBulletedSectionItem(
-                  'certifications',
-                  index,
-                  'period',
-                  event.target.value,
-                )
-              }
-              value={item.period}
-            />
-          </div>
+  const renderBulletEditor = (
+    prefix: string,
+    bullets: string[],
+    onChange: (bulletIndex: number, value: string) => void,
+    onAdd: () => void,
+    onRemove: (bulletIndex: number) => void,
+    onReorder: (fromIndex: number, toIndex: number) => void,
+  ) => {
+    const issues = lintBullets(bullets)
+
+    return (
+      <div className="pt-1">
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-[11px] font-medium text-muted">Bullets</span>
+          <button
+            className="rounded-md px-1.5 py-1 text-[11px] font-medium text-muted outline-none transition hover:bg-neutral-100 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-ink/20"
+            onClick={onAdd}
+            type="button"
+          >
+            <span className="inline-flex items-center gap-1">
+              <Plus className="h-3 w-3" />
+              Add bullet
+            </span>
+          </button>
         </div>
-      ))}
-    </section>
-  )
+        {bullets.length ? (
+          <SortableList ids={idsFor(prefix, bullets.length)} onReorder={onReorder}>
+            {bullets.map((bullet, bulletIndex) => (
+              <SortableRow
+                id={`${prefix}-${bulletIndex}`}
+                key={`${prefix}-${bulletIndex}`}
+                label={`bullet ${bulletIndex + 1}`}
+                onRemove={() => onRemove(bulletIndex)}
+              >
+                <textarea
+                  className="w-full resize-y rounded-lg border border-rule bg-white px-2.5 py-1.5 text-[13px] leading-5 text-neutral-900 outline-none transition [field-sizing:content] placeholder:text-neutral-400 focus:border-ink focus:ring-2 focus:ring-ink/10"
+                  onChange={(event) => onChange(bulletIndex, event.target.value)}
+                  placeholder="What you did, and what came of it"
+                  rows={2}
+                  value={bullet}
+                />
+                <BulletAdvice issues={issues[bulletIndex] ?? []} />
+              </SortableRow>
+            ))}
+          </SortableList>
+        ) : (
+          <EmptySection>No bullets yet</EmptySection>
+        )}
+      </div>
+    )
+  }
+
+  const renderSimpleSection = (
+    section: SimpleSectionName,
+    title: string,
+    fields: SimpleSectionField[],
+    defaultItem: Education | Course,
+    emptyMessage: string,
+  ) => {
+    const items = simpleItems(data, section)
+
+    return (
+      <Section
+        count={items.length}
+        name={section}
+        onAdd={() => addSimpleSectionItem(section, defaultItem)}
+        title={title}
+      >
+        {items.length ? (
+          <SortableList
+            ids={idsFor(section, items.length)}
+            onReorder={(from, to) => reorderSimpleSection(section, from, to)}
+          >
+            {items.map((item, itemIndex) => (
+              <SortableItem
+                id={`${section}-${itemIndex}`}
+                key={`${section}-${itemIndex}`}
+                meta={item.period}
+                onRemove={() => removeSimpleSectionItem(section, itemIndex)}
+                title={item.title || 'Untitled'}
+              >
+                {fields.map((field) => (
+                  <Field
+                    key={field.key}
+                    label={field.label}
+                    onChange={(value) =>
+                      updateSimpleSectionItem(section, itemIndex, field.key, value)
+                    }
+                    rows={2}
+                    textarea={field.textarea}
+                    value={item[field.key] ?? ''}
+                  />
+                ))}
+              </SortableItem>
+            ))}
+          </SortableList>
+        ) : (
+          <EmptySection>{emptyMessage}</EmptySection>
+        )}
+      </Section>
+    )
+  }
+
+  const saveLabel =
+    saveState === 'pending'
+      ? 'Unsaved changes'
+      : saveState === 'saving'
+        ? 'Saving'
+        : 'All changes saved'
 
   return (
-    <div className="min-h-screen bg-neutral-100 text-neutral-900 print:bg-white">
+    <div className="min-h-screen bg-neutral-100 text-neutral-900 print:bg-white xl:h-screen xl:overflow-hidden">
       <style>{`
         @media print {
           .print-hide { display: none !important; }
@@ -1242,420 +804,573 @@ function App() {
         }
       `}</style>
 
-      <div className="grid min-h-screen grid-cols-1 xl:grid-cols-[420px_1fr]">
-        <aside className="print-hide border-r border-neutral-200 bg-white p-6 xl:h-screen xl:overflow-auto">
-          <div className="sticky top-0 bg-white pb-4">
-            <div className="flex items-center gap-3">
-              <div className="rounded-2xl bg-neutral-900 p-2 text-white">
-                <FileText className="h-5 w-5" />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold">CV Editor</h2>
-                <p className="text-sm text-neutral-500">
-                  Update content and export PDF
-                </p>
+      <div className="grid min-h-screen grid-cols-1 xl:h-full xl:min-h-0 xl:grid-cols-[400px_1fr]">
+        <aside className="print-hide flex min-h-0 flex-col border-r border-rule bg-white xl:h-full">
+          <header className="sticky top-0 z-30 shrink-0 bg-ink px-4 py-3 text-white xl:static">
+            <div className="flex items-center justify-between gap-2">
+              <DocumentMenu
+                index={index}
+                onCreate={() => createDocument('Untitled CV', emptyCV)}
+                onDelete={deleteActiveDocument}
+                onDuplicate={() => createDocument(`${activeName} copy`, data)}
+                onExport={() => downloadJson(activeName, data)}
+                onImport={importDocument}
+                onRename={(name) =>
+                  setIndex((previous) =>
+                    touchDocument(previous, previous.activeId, { name }),
+                  )
+                }
+                onSwitch={switchDocument}
+              />
+              <div className="flex shrink-0 items-center gap-0.5">
+                <button
+                  aria-label="Undo"
+                  className="rounded-md p-1.5 text-white/70 outline-none transition hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-25 disabled:hover:bg-transparent"
+                  disabled={!canUndo}
+                  onClick={undo}
+                  title="Undo (Ctrl+Z)"
+                  type="button"
+                >
+                  <Undo2 className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  aria-label="Redo"
+                  className="rounded-md p-1.5 text-white/70 outline-none transition hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-25 disabled:hover:bg-transparent"
+                  disabled={!canRedo}
+                  onClick={redo}
+                  title="Redo (Ctrl+Shift+Z)"
+                  type="button"
+                >
+                  <Redo2 className="h-3.5 w-3.5" />
+                </button>
               </div>
             </div>
+
             <button
-              className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-neutral-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:opacity-60"
-              disabled={isExporting}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-white px-3 py-2.5 text-[13px] font-semibold text-ink outline-none transition hover:bg-white/90 focus-visible:ring-2 focus-visible:ring-white/40"
               onClick={exportPdf}
               type="button"
             >
-              <Download className="h-4 w-4" />
-              {isExporting ? 'Exporting...' : 'Export PDF'}
+              <Download className="h-3.5 w-3.5" />
+              Export PDF
             </button>
-            <button
-              className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm font-semibold text-neutral-900 transition hover:bg-neutral-50"
-              onClick={saveData}
-              type="button"
-            >
-              <Save className="h-4 w-4" />
-              Save Changes
-            </button>
-            {saveStatus ? (
-              <div className="mt-2 text-center text-sm font-medium text-neutral-500">
-                {saveStatus}
+
+            <div className="mt-2">
+              <TemplatePicker
+                data={data}
+                onChange={(templateId) =>
+                  setData((previous) => ({ ...previous, templateId }))
+                }
+                templateId={template.id}
+              />
+            </div>
+
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <span className="text-[11px] text-white/45">{saveLabel}</span>
+              <button
+                className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] text-white/55 outline-none transition hover:bg-white/5 hover:text-white/85 focus-visible:ring-2 focus-visible:ring-white/40 disabled:opacity-50"
+                disabled={isExporting}
+                onClick={exportImagePdf}
+                type="button"
+              >
+                <ImageIcon className="h-3 w-3" />
+                {isExporting ? 'Exporting' : 'Export as image'}
+              </button>
+            </div>
+          </header>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <Section name="personal" title="Personal">
+              <div className="space-y-2.5">
+                <PhotoField
+                  onChange={(photo) =>
+                    setData((previous) => ({ ...previous, photo }))
+                  }
+                  photo={data.photo}
+                  usedByTemplate={template.photo !== 'none'}
+                />
+                <Field
+                  label="Full name"
+                  onChange={(value) => updatePersonal('fullName', value)}
+                  value={data.personal.fullName}
+                />
+                <Field
+                  label="Title"
+                  onChange={(value) => updatePersonal('title', value)}
+                  value={data.personal.title}
+                />
+                <Field
+                  label="Address"
+                  onChange={(value) => updatePersonal('address', value)}
+                  rows={2}
+                  textarea
+                  value={data.personal.address}
+                />
+                <FieldPair>
+                  <Field
+                    label="Phone"
+                    onChange={(value) => updatePersonal('phone', value)}
+                    value={data.personal.phone}
+                  />
+                  <Field
+                    label="Email"
+                    onChange={(value) => updatePersonal('email', value)}
+                    value={data.personal.email}
+                  />
+                </FieldPair>
+                <FieldPair>
+                  <Field
+                    label="Born"
+                    onChange={(value) => updatePersonal('birth', value)}
+                    value={data.personal.birth}
+                  />
+                  <Field
+                    label="Birthplace"
+                    onChange={(value) => updatePersonal('birthPlace', value)}
+                    value={data.personal.birthPlace}
+                  />
+                </FieldPair>
+                <Field
+                  label="Nationality"
+                  onChange={(value) => updatePersonal('nationality', value)}
+                  value={data.personal.nationality}
+                />
               </div>
-            ) : null}
-          </div>
+            </Section>
 
-          <div className="mt-6 space-y-8">
-            <section className="space-y-3">
-              <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-neutral-600">
-                Personal
-              </h3>
-              <SidebarField
-                label="Full name"
-                onChange={(event) =>
-                  updatePersonal('fullName', event.target.value)
+            <Section defaultOpen={false} name="layout" title="Layout">
+              <LayoutControls
+                baseTemplate={baseTemplate}
+                data={data}
+                layout={data.layout}
+                onChange={(layout) =>
+                  setData((previous) => ({ ...previous, layout }))
                 }
-                value={data.personal.fullName}
               />
-              <SidebarField
-                label="Title"
-                onChange={(event) => updatePersonal('title', event.target.value)}
-                value={data.personal.title}
-              />
-              <SidebarField
-                label="Address"
-                onChange={(event) =>
-                  updatePersonal('address', event.target.value)
-                }
-                textarea
-                value={data.personal.address}
-              />
-              <SidebarField
-                label="Phone"
-                onChange={(event) => updatePersonal('phone', event.target.value)}
-                value={data.personal.phone}
-              />
-              <SidebarField
-                label="Email"
-                onChange={(event) => updatePersonal('email', event.target.value)}
-                value={data.personal.email}
-              />
-              <SidebarField
-                label="Birth date"
-                onChange={(event) => updatePersonal('birth', event.target.value)}
-                value={data.personal.birth}
-              />
-              <SidebarField
-                label="Birth place"
-                onChange={(event) =>
-                  updatePersonal('birthPlace', event.target.value)
-                }
-                value={data.personal.birthPlace}
-              />
-              <SidebarField
-                label="Nationality"
-                onChange={(event) =>
-                  updatePersonal('nationality', event.target.value)
-                }
-                value={data.personal.nationality}
-              />
-            </section>
+            </Section>
 
-            <section className="space-y-3">
-              <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-neutral-600">
-                Profile
-              </h3>
-              <SidebarField
+            <Section name="profile" title="Profile">
+              <Field
+                hint="Two or three sentences. Lead with what you actually build."
                 label="Summary"
-                onChange={(event) =>
-                  setData((previous) => ({
-                    ...previous,
-                    profile: event.target.value,
-                  }))
+                onChange={(value) =>
+                  setData((previous) => ({ ...previous, profile: value }))
                 }
+                rows={6}
                 textarea
                 value={data.profile}
               />
-            </section>
+            </Section>
 
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-neutral-600">
-                  Skills
-                </h3>
-                <button
-                  className="rounded-xl border px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
-                  onClick={addSkill}
-                  type="button"
+            <Section
+              count={data.experience.length}
+              name="experience"
+              onAdd={addJob}
+              title="Experience"
+            >
+              {data.experience.length ? (
+                <SortableList
+                  ids={idsFor('experience', data.experience.length)}
+                  onReorder={reorderJobs}
                 >
-                  <span className="inline-flex items-center gap-1">
-                    <Plus className="h-4 w-4" /> Add
-                  </span>
-                </button>
-              </div>
-              {data.skills.map((skill, index) => (
-                <div
-                  className="rounded-2xl border border-neutral-200 p-3"
-                  key={`skill-editor-${index}`}
+                  {data.experience.map((job, jobIndex) => (
+                    <SortableItem
+                      id={`experience-${jobIndex}`}
+                      issueCount={countIssues(job.bullets)}
+                      key={`experience-${jobIndex}`}
+                      meta={job.period}
+                      onRemove={() => removeJob(jobIndex)}
+                      title={job.title || 'Untitled role'}
+                    >
+                      <Field
+                        label="Role and company"
+                        onChange={(value) => updateJob(jobIndex, 'title', value)}
+                        rows={2}
+                        textarea
+                        value={job.title}
+                      />
+                      <FieldPair>
+                        <Field
+                          label="Period"
+                          onChange={(value) =>
+                            updateJob(jobIndex, 'period', value)
+                          }
+                          value={job.period}
+                        />
+                        <Field
+                          label="Location"
+                          onChange={(value) =>
+                            updateJob(jobIndex, 'location', value)
+                          }
+                          value={job.location}
+                        />
+                      </FieldPair>
+                      {renderBulletEditor(
+                        `experience-${jobIndex}-bullet`,
+                        job.bullets,
+                        (bulletIndex, value) =>
+                          updateJobBullet(jobIndex, bulletIndex, value),
+                        () => addJobBullet(jobIndex),
+                        (bulletIndex) => removeJobBullet(jobIndex, bulletIndex),
+                        (from, to) => reorderJobBullets(jobIndex, from, to),
+                      )}
+                    </SortableItem>
+                  ))}
+                </SortableList>
+              ) : (
+                <EmptySection>Add your first role</EmptySection>
+              )}
+            </Section>
+
+            {renderSimpleSection(
+              'education',
+              'Education',
+              educationFields,
+              newEducation,
+              'Add a degree or school',
+            )}
+
+            {renderSimpleSection(
+              'courses',
+              'Courses',
+              courseFields,
+              newCourse,
+              'Add a course',
+            )}
+
+            <Section
+              count={data.certifications.length}
+              name="certifications"
+              onAdd={() =>
+                addBulletedSectionItem('certifications', {
+                  title: 'New certification',
+                  subtitle: 'Issuer',
+                  period: '2024',
+                  bullets: [],
+                })
+              }
+              title="Certifications"
+            >
+              {data.certifications.length ? (
+                <SortableList
+                  ids={idsFor('certifications', data.certifications.length)}
+                  onReorder={(from, to) =>
+                    reorderBulletedSection('certifications', from, to)
+                  }
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="w-full space-y-2">
-                      <SidebarField
-                        label="Title"
-                        onChange={(event) =>
-                          updateSkillTitle(index, event.target.value)
+                  {data.certifications.map((item, itemIndex) => (
+                    <SortableItem
+                      id={`certifications-${itemIndex}`}
+                      key={`certifications-${itemIndex}`}
+                      meta={item.period}
+                      onRemove={() =>
+                        removeBulletedSectionItem('certifications', itemIndex)
+                      }
+                      title={item.title || 'Untitled'}
+                    >
+                      <Field
+                        label="Certification"
+                        onChange={(value) =>
+                          updateBulletedSectionItem(
+                            'certifications',
+                            itemIndex,
+                            'title',
+                            value,
+                          )
+                        }
+                        rows={2}
+                        textarea
+                        value={item.title}
+                      />
+                      <FieldPair>
+                        <Field
+                          label="Issuer"
+                          onChange={(value) =>
+                            updateBulletedSectionItem(
+                              'certifications',
+                              itemIndex,
+                              'subtitle',
+                              value,
+                            )
+                          }
+                          value={item.subtitle}
+                        />
+                        <Field
+                          label="Period"
+                          onChange={(value) =>
+                            updateBulletedSectionItem(
+                              'certifications',
+                              itemIndex,
+                              'period',
+                              value,
+                            )
+                          }
+                          value={item.period}
+                        />
+                      </FieldPair>
+                    </SortableItem>
+                  ))}
+                </SortableList>
+              ) : (
+                <EmptySection>Add a certification</EmptySection>
+              )}
+            </Section>
+
+            <Section
+              count={data.projects.length}
+              name="projects"
+              onAdd={() =>
+                addBulletedSectionItem('projects', {
+                  title: 'New project',
+                  subtitle: 'Role and stack',
+                  period: '2024',
+                  bullets: [''],
+                })
+              }
+              title="Projects"
+            >
+              {data.projects.length ? (
+                <SortableList
+                  ids={idsFor('projects', data.projects.length)}
+                  onReorder={(from, to) =>
+                    reorderBulletedSection('projects', from, to)
+                  }
+                >
+                  {data.projects.map((item, itemIndex) => (
+                    <SortableItem
+                      id={`projects-${itemIndex}`}
+                      issueCount={countIssues(item.bullets)}
+                      key={`projects-${itemIndex}`}
+                      meta={item.period}
+                      onRemove={() =>
+                        removeBulletedSectionItem('projects', itemIndex)
+                      }
+                      title={item.title || 'Untitled project'}
+                    >
+                      <Field
+                        label="Project"
+                        onChange={(value) =>
+                          updateBulletedSectionItem(
+                            'projects',
+                            itemIndex,
+                            'title',
+                            value,
+                          )
+                        }
+                        rows={2}
+                        textarea
+                        value={item.title}
+                      />
+                      <FieldPair>
+                        <Field
+                          label="Role and stack"
+                          onChange={(value) =>
+                            updateBulletedSectionItem(
+                              'projects',
+                              itemIndex,
+                              'subtitle',
+                              value,
+                            )
+                          }
+                          value={item.subtitle}
+                        />
+                        <Field
+                          label="Period"
+                          onChange={(value) =>
+                            updateBulletedSectionItem(
+                              'projects',
+                              itemIndex,
+                              'period',
+                              value,
+                            )
+                          }
+                          value={item.period}
+                        />
+                      </FieldPair>
+                      {renderBulletEditor(
+                        `projects-${itemIndex}-bullet`,
+                        item.bullets,
+                        (bulletIndex, value) =>
+                          updateBulletedSectionBullet(
+                            'projects',
+                            itemIndex,
+                            bulletIndex,
+                            value,
+                          ),
+                        () => addBulletedSectionBullet('projects', itemIndex),
+                        (bulletIndex) =>
+                          removeBulletedSectionBullet(
+                            'projects',
+                            itemIndex,
+                            bulletIndex,
+                          ),
+                        (from, to) =>
+                          reorderBulletedSectionBullets(
+                            'projects',
+                            itemIndex,
+                            from,
+                            to,
+                          ),
+                      )}
+                    </SortableItem>
+                  ))}
+                </SortableList>
+              ) : (
+                <EmptySection>Add a project</EmptySection>
+              )}
+            </Section>
+
+            <Section
+              count={data.skills.length}
+              name="skills"
+              onAdd={addSkill}
+              title="Skills"
+            >
+              {data.skills.length ? (
+                <SortableList
+                  ids={idsFor('skills', data.skills.length)}
+                  onReorder={reorderSkills}
+                >
+                  {data.skills.map((skill, skillIndex) => (
+                    <SortableItem
+                      id={`skills-${skillIndex}`}
+                      key={`skills-${skillIndex}`}
+                      meta={`${skill.bullets.length}`}
+                      onRemove={() => removeSkill(skillIndex)}
+                      title={skill.title || 'Untitled group'}
+                    >
+                      <Field
+                        label="Group"
+                        onChange={(value) =>
+                          updateSkill(skillIndex, 'title', value)
                         }
                         value={skill.title}
                       />
-                      <SidebarField
-                        label="Skills (one per line)"
-                        onChange={(event) =>
-                          updateSkillBullets(index, event.target.value)
+                      <Field
+                        hint="One per line"
+                        label="Skills"
+                        onChange={(value) =>
+                          updateSkill(skillIndex, 'bullets', value)
                         }
+                        rows={3}
                         textarea
                         value={skill.bullets.join('\n')}
                       />
-                    </div>
-                    <div className="mt-1 flex flex-col gap-1">
-                      <button
-                        aria-label={`Move skill ${index + 1} up`}
-                        className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
-                        disabled={index === 0}
-                        onClick={() => moveSkill(index, -1)}
-                        title="Move up"
-                        type="button"
-                      >
-                        <ArrowUp className="h-4 w-4" />
-                      </button>
-                      <button
-                        aria-label={`Move skill ${index + 1} down`}
-                        className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
-                        disabled={index === data.skills.length - 1}
-                        onClick={() => moveSkill(index, 1)}
-                        title="Move down"
-                        type="button"
-                      >
-                        <ArrowDown className="h-4 w-4" />
-                      </button>
-                      <button
-                        aria-label={`Remove skill ${index + 1}`}
-                        className="rounded-lg p-2 hover:bg-neutral-100"
-                        onClick={() => removeSkill(index)}
-                        title="Remove"
-                        type="button"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </section>
+                    </SortableItem>
+                  ))}
+                </SortableList>
+              ) : (
+                <EmptySection>Add a skill group</EmptySection>
+              )}
+            </Section>
 
-            <section className="space-y-3">
-              <SidebarField
-                label="Hobbies"
-                onChange={(event) =>
-                  setData((previous) => ({
-                    ...previous,
-                    hobbies: event.target.value,
-                  }))
-                }
-                value={data.hobbies}
-              />
-              <SidebarField
-                label="Languages (comma separated)"
-                onChange={(event) =>
-                  setData((previous) => ({
-                    ...previous,
-                    languages: event.target.value
-                      .split(',')
-                      .map((value) => value.trim())
-                      .filter(Boolean),
-                  }))
-                }
-                value={data.languages.join(', ')}
-              />
-            </section>
-
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-neutral-600">
-                  Links
-                </h3>
-                <button
-                  className="rounded-xl border px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
-                  onClick={addLink}
-                  type="button"
-                >
-                  <span className="inline-flex items-center gap-1">
-                    <Plus className="h-4 w-4" /> Add
-                  </span>
-                </button>
+            <Section name="languages-and-hobbies" title="Languages and hobbies">
+              <div className="space-y-2.5">
+                <Field
+                  hint="Separate with commas"
+                  label="Languages"
+                  onChange={(value) =>
+                    setData((previous) => ({
+                      ...previous,
+                      languages: value
+                        .split(',')
+                        .map((entry) => entry.trim())
+                        .filter(Boolean),
+                    }))
+                  }
+                  value={data.languages.join(', ')}
+                />
+                <Field
+                  label="Hobbies"
+                  onChange={(value) =>
+                    setData((previous) => ({ ...previous, hobbies: value }))
+                  }
+                  value={data.hobbies}
+                />
               </div>
-              {data.links.map((link, index) => (
-                <div
-                  className="rounded-2xl border border-neutral-200 p-3"
-                  key={`link-editor-${index}`}
+            </Section>
+
+            <Section
+              count={data.links.length}
+              name="links"
+              onAdd={addLink}
+              title="Links"
+            >
+              {data.links.length ? (
+                <SortableList
+                  ids={idsFor('links', data.links.length)}
+                  onReorder={reorderLinks}
                 >
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="text-sm font-semibold">Link {index + 1}</div>
-                    <button
-                      className="rounded-lg p-2 hover:bg-neutral-100"
-                      onClick={() => removeLink(index)}
-                      type="button"
+                  {data.links.map((link, linkIndex) => (
+                    <SortableRow
+                      id={`links-${linkIndex}`}
+                      key={`links-${linkIndex}`}
+                      label={link.title || `link ${linkIndex + 1}`}
+                      onRemove={() => removeLink(linkIndex)}
                     >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    <SidebarField
-                      label="Title"
-                      onChange={(event) =>
-                        updateLink(index, 'title', event.target.value)
-                      }
-                      value={link.title}
-                    />
-                    <SidebarField
-                      label="URL"
-                      onChange={(event) =>
-                        updateLink(index, 'url', event.target.value)
-                      }
-                      value={link.url}
-                    />
-                  </div>
-                </div>
-              ))}
-            </section>
-
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-neutral-600">
-                  Experience
-                </h3>
-                <button
-                  className="rounded-xl border px-3 py-1.5 text-sm font-medium hover:bg-neutral-50"
-                  onClick={addJob}
-                  type="button"
-                >
-                  <span className="inline-flex items-center gap-1">
-                    <Plus className="h-4 w-4" /> Add
-                  </span>
-                </button>
-              </div>
-              {data.experience.map((job, index) => (
-                <div
-                  className="rounded-2xl border border-neutral-200 p-3"
-                  key={`job-editor-${index}`}
-                >
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="text-sm font-semibold">Job {index + 1}</div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        aria-label={`Move job ${index + 1} up`}
-                        className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
-                        disabled={index === 0}
-                        onClick={() => moveJob(index, -1)}
-                        title="Move up"
-                        type="button"
-                      >
-                        <ArrowUp className="h-4 w-4" />
-                      </button>
-                      <button
-                        aria-label={`Move job ${index + 1} down`}
-                        className="rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
-                        disabled={index === data.experience.length - 1}
-                        onClick={() => moveJob(index, 1)}
-                        title="Move down"
-                        type="button"
-                      >
-                        <ArrowDown className="h-4 w-4" />
-                      </button>
-                      <button
-                        aria-label={`Remove job ${index + 1}`}
-                        className="rounded-lg p-2 hover:bg-neutral-100"
-                        onClick={() => removeJob(index)}
-                        title="Remove"
-                        type="button"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <SidebarField
-                      label="Title"
-                      onChange={(event) =>
-                        updateJob(index, 'title', event.target.value)
-                      }
-                      value={job.title}
-                    />
-                    <SidebarField
-                      label="Location"
-                      onChange={(event) =>
-                        updateJob(index, 'location', event.target.value)
-                      }
-                      value={job.location}
-                    />
-                    <SidebarField
-                      label="Period"
-                      onChange={(event) =>
-                        updateJob(index, 'period', event.target.value)
-                      }
-                      value={job.period}
-                    />
-                    <div className="pt-2">
-                      <div className="mb-2 flex items-center justify-between">
-                        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">
-                          Bullets
-                        </span>
-                        <button
-                          className="inline-flex items-center gap-1 rounded-lg border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100"
-                          onClick={() => addJobBullet(index)}
-                          type="button"
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                          Add bullet
-                        </button>
+                      <div className="grid grid-cols-[1fr_1.4fr] gap-2 py-0.5">
+                        <input
+                          aria-label={`Link ${linkIndex + 1} title`}
+                          className="w-full rounded-lg border border-rule bg-white px-2.5 py-1.5 text-[13px] text-neutral-900 outline-none transition focus:border-ink focus:ring-2 focus:ring-ink/10"
+                          onChange={(event) =>
+                            updateLink(linkIndex, 'title', event.target.value)
+                          }
+                          placeholder="Title"
+                          value={link.title}
+                        />
+                        <input
+                          aria-label={`Link ${linkIndex + 1} URL`}
+                          className="w-full rounded-lg border border-rule bg-white px-2.5 py-1.5 text-[13px] text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-ink focus:ring-2 focus:ring-ink/10"
+                          onChange={(event) =>
+                            updateLink(linkIndex, 'url', event.target.value)
+                          }
+                          placeholder="github.com/you"
+                          value={link.url}
+                        />
                       </div>
-                      <div className="space-y-2">
-                        {job.bullets.map((bullet, bulletIndex) => (
-                          <div
-                            className="flex items-start gap-2"
-                            key={`job-${index}-bullet-editor-${bulletIndex}`}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <SidebarField
-                                label={`Bullet ${bulletIndex + 1}`}
-                                onChange={(event) =>
-                                  updateJobBullet(
-                                    index,
-                                    bulletIndex,
-                                    event.target.value,
-                                  )
-                                }
-                                textarea
-                                value={bullet}
-                              />
-                            </div>
-                            <button
-                              aria-label={`Remove bullet ${bulletIndex + 1} from job ${index + 1}`}
-                              className="mt-6 rounded-lg p-2 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
-                              disabled={job.bullets.length === 1}
-                              onClick={() =>
-                                removeJobBullet(index, bulletIndex)
-                              }
-                              title="Remove bullet"
-                              type="button"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </section>
+                    </SortableRow>
+                  ))}
+                </SortableList>
+              ) : (
+                <EmptySection>Add a link</EmptySection>
+              )}
+            </Section>
 
-            {renderCertificationEditor()}
-
-            {renderBulletedSectionEditor('projects', 'Projects', 'Project', 'Role / Tech stack', {
-              title: 'New Project',
-              subtitle: 'Role / Tech stack',
-              period: '2024',
-              bullets: ['Describe the project impact'],
-            })}
+            <div className="h-12" />
           </div>
         </aside>
 
-        <main className="overflow-auto p-4 md:p-8">
-          <div className="mx-auto max-w-[900px]" ref={exportRef}>
-            <div>
-              <CVPage data={data} />
+        <main className="min-w-0 p-4 md:p-8 xl:h-full xl:min-h-0 xl:overflow-auto" ref={previewRef}>
+          <PreviewToolbar
+            onFit={fitToWidth}
+            onZoomChange={setZoom}
+            pageCount={pageCount}
+            zoom={zoom}
+          />
+          <div
+            className="mx-auto"
+            style={{
+              width: PAGE_WIDTH * zoom,
+              height: naturalHeight ? naturalHeight * zoom : undefined,
+            }}
+          >
+            <div
+              ref={scaledRef}
+              style={{
+                width: PAGE_WIDTH,
+                transform: `scale(${zoom})`,
+                transformOrigin: 'top left',
+              }}
+            >
+              <div ref={exportRef}>
+                <CVDocument
+                  data={data}
+                  template={template}
+                  onPageCountChange={handlePageCountChange}
+                  onSelectBlock={handleSelectBlock}
+                />
+              </div>
             </div>
-            <div>
-              <CVPage data={data} secondPage />
-            </div>
-          </div>
-          <div className="print-hide mt-6 text-center text-sm text-neutral-500">
-            Preview pages: {pageCount}
           </div>
         </main>
       </div>
@@ -1663,4 +1378,28 @@ function App() {
   )
 }
 
-export default App
+function BulletAdvice({ issues }: { issues: BulletIssue[] }) {
+  if (!issues.length) return null
+
+  return (
+    <ul className="mb-1 mt-1 space-y-0.5">
+      {issues.map((issue) => (
+        <li
+          className="flex gap-1.5 text-[11px] leading-4 text-muted"
+          key={issue.code}
+        >
+          <span className="mt-[6px] h-1 w-1 shrink-0 rounded-full bg-advice" />
+          {issue.message}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+export default function App() {
+  return (
+    <FocusProvider>
+      <Editor />
+    </FocusProvider>
+  )
+}

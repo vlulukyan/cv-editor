@@ -2,85 +2,35 @@
   min-height: 100vh;
 }
 
-.cv-page {
-  font-family: Arial, Helvetica, sans-serif;
+/*
+ * Text rendering hints shared by the page and the hidden measuring layer.
+ * They MUST match: pagination trusts the measured height, so any difference in
+ * how text is shaped lets a narrow column wrap onto a line nobody budgeted for.
+ * The font family itself comes from the template, inline on each page.
+ */
+.cv-page,
+.cv-measure {
   font-kerning: none;
   font-variant-ligatures: none;
   letter-spacing: 0;
   text-rendering: geometricPrecision;
 }
 
-.cv-skill-list {
-  margin-top: 22px;
+/*
+ * Clicking a part of the preview reveals it in the editor. Outline rather than
+ * border so the affordance can never shift the measured page layout.
+ */
+.cv-selectable {
+  cursor: pointer;
 }
 
-.cv-skill-item {
-  margin: 0 0 20px;
-  break-inside: avoid;
+.cv-selectable:hover {
+  outline: 1px solid rgba(23, 23, 23, 0.28);
+  outline-offset: 5px;
 }
 
-.cv-skill-item:last-child {
-  margin-bottom: 0;
-}
-
-.cv-skill-title {
-  display: block;
-  margin: 0;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 14px;
-  overflow-wrap: break-word;
-}
-
-.cv-bullet-list {
-  margin-top: 12px;
-  padding-left: 8px;
-  font-size: 11px;
-  line-height: 17px;
-}
-
-.cv-bullet-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 13px;
-  margin-bottom: 7px;
-  break-inside: avoid;
-}
-
-.cv-bullet-row:last-child {
-  margin-bottom: 0;
-}
-
-.cv-bullet-marker {
-  flex: 0 0 auto;
-  width: 3px;
-  height: 3px;
-  margin-top: 7px;
-  border-radius: 999px;
-  background: #171717;
-}
-
-.cv-bullet-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  line-height: 17px;
-}
-
-.cv-skill-item .cv-bullet-list {
-  margin-top: 8px;
-}
-
-.cv-skill-item .cv-bullet-row {
-  gap: 9px;
-  margin-bottom: 4px;
-}
-
-.cv-skill-item .cv-bullet-marker {
-  width: 4px;
-  height: 4px;
-  margin-top: 6px;
-}
-
-.cv-skill-item .cv-bullet-text {
-  line-height: 15px;
+/* Template thumbnails render the real page, minus the page furniture. */
+.cv-thumb .cv-page {
+  margin: 0 !important;
+  box-shadow: none !important;
 }
